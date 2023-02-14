@@ -1,55 +1,11 @@
-## load rtweet
-library(rtweet)
-## load the tidyverse
-library(tidyverse)
-## store api keys (these are fake example values; replace with your own keys)
-api_key <- "yBUKMtVObxyq0FgJQfKas0FlN"
-api_secret_key <- "f1KS00WgexCdlh8fYLIc1XJu4MXi6GLFgOdkekeQcJwUx7zMII"
-## authenticate via web browser
-token <- create_token(
-  app = "rstatsjournalismresearch",
-  consumer_key = api_key,
-  consumer_secret = api_secret_key)
-get_token()
-
-rt <- search_tweets("#DataScience", n = 1000, include_rts = FALSE)
-View(rt)
-
-auth_get()
-auth_as(my_app)
-my_app <-rtweet_app(
-  "AAAAAAAAAAAAAAAAAAAAAIu%2BKQEAAAAAeqDhfFHMTUIbxX%2FWejDsB80JF0s%3DcAxcbtzPMuHf3XxGsGQKxE66pgsGA7CJs8UK0GUkNvk7NTtgfE"
-)
-
-
-
-tweets <- get_timeline("openAI", 
-                        n = 10000, 
-                        language = 'en')
-
-
-
-tweets_ShannonVallor <- get_timelines("ShannonVallor", 
-                        n = 10000, 
-                        language = 'en')
-
-tweets_ShannonVallor %>% View()
-
-
-tweets_MCoeckelbergh <- get_timelines("MCoeckelbergh"
-
-
-auths <- c('Floridi', 'katecrawford', 'spillteori', 'SSorgner', 'PaulNemitz', 'SvenNyholm', 'jud1ths1mon', 
-'EthicsInAI', 'AdaLovelaceInst', 'TechneSPT', 'David_Gunkel', 'VincentCMueller', 'Dr_Atoosa', 'emilymbender',
-'sethlazar', 'ppverbeek', 'WesselReijers', 'symboliev')
-
-
-all_the_tweets <- lapply(auths, function(x) get_timelines(x,n = 100, 
-                                             language = 'en') %>% as_tibble())
+getwd()
+# here I use a recursive version of the get_timeline function from the rtweet package for all the different authors and I get the total
+# collection of their tweets. It is important to mention that what I get is actually the whole amount of tweets from them where 
+# they mentioned the 
 
 save(all_the_tweets, file = "all_the_tweets.rds")
 
-
+all_the_tweets %>% head()
 
 
 

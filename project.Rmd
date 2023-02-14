@@ -7,6 +7,28 @@ output:
   df_print: paged
 ---
   
+```{r}
+library(lubridate)
+library(magrittr)
+library(plotly)
+library(rtweet)
+library(tidyverse)
+
+
+
+```
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
   # Automated Article Classification and Validation
   
   ### Data
@@ -21,9 +43,7 @@ Lets load the data first and take a look. Each row represents one news article.
 
 ```{r}
 ## load rtweet
-library(rtweet)
 ## load the tidyverse
-library(tidyverse)
 ## store api keys (these are fake example values; replace with your own keys)
 api_key <- "yBUKMtVObxyq0FgJQfKas0FlN"
 api_secret_key <- "f1KS00WgexCdlh8fYLIc1XJu4MXi6GLFgOdkekeQcJwUx7zMII"
@@ -63,15 +83,19 @@ Thi schuck of code takes relatively long to download all the tweets, this is why
 ```{r}
 
 load('all_the_tweets.rds')
+all_the_tweets[[1]] %>% colnames() 
+# in this way we can see how the 
+
 
 ```
 
 
-These tweets come out of the function as a liost. What I do in the following chuck on code is to transfrom them in a Tibble assigning also a new columsn so that they can be associated more easily with the author. 
+
+
+These tweets come out of the function as a list. What I do in the following chuck on code is to transfrom them in a Tibble assigning also a new columsn so that they can be associated more easily with the author. 
 
 ```{r}
 
-all_the_tweets[[1]] %>% colnames()
 
 
 ```
@@ -83,7 +107,7 @@ selected_columns <- lapply(seq_along(all_the_tweets), function(i) {
   
   df <- all_the_tweets[[i]]
 
-  dplyr::mutate(dplyr::select(df,created_at,full_text), author=  auths[[i]])
+  dplyr::mutate(dplyr::select(dplyr::filter(df, lang =='en'),created_at,full_text), author=  auths[[i]])
   
 })
                        
@@ -92,6 +116,40 @@ tibble_tweets <- bind_rows(selected_columns)
   
   
 ```
+
+
+
+Ok the first basic analysis which we have to do is to analyse the kind of time-line we are dealing with.
+
+```{r}
+tibble_tweets %<>%  
+  mutate(
+    created = created_at %>% 
+      # Remove zeros.
+      str_remove_all(pattern = '\\+0000') %>%
+      # Parse date.
+      parse_date_time(orders = '%y-%m-%d %H%M%S')
+  )
+
+tibble_tweets %<>% 
+  mutate(Created_At_Round = created%>% round(units = 'hours') %>% as.POSIXct())
+
+tibble_tweets %>% pull(created) %>% min()
+## [1] "2021-10-05 01:34:17 UTC"
+tibble_tweets %>% pull(created) %>% max()
+## [1] "2021-10-08 01:25:52 UTC"
+plt <- tibble_tweets %>% 
+  dplyr::count(Created_At_Round) %>% 
+  ggplot(mapping = aes(x = Created_At_Round, y = n)) +
+  theme_light() +
+  geom_line() +
+  xlab(label = 'Date') +
+  ylab(label = NULL) +
+  ggtitle(label = 'Number of Tweets per Hour')
+
+plt %>% ggplotly()
+```
+
 
 
 Let us now inspect the column `text`, the column with our text to be analyzed. 
@@ -107,6 +165,110 @@ class(tibble_tweets$full_text) # check the class of the column.
 
 
 ```
+Ok now what we have to do is to clean a biut these data and see what comes out of them 
+
+```{r}
+tibble_tweets$full_text <- gsub("RT", "", tibble_tweets$full_text) # remove RT
+tibble_tweets$full_text <- gsub("http\\S+", "", tibble_tweets$full_text) # remove URLs
+tibble_tweets$full_text <- gsub("@\\S+", "", tibble_tweets$full_text) # remove mentions
+tibble_tweets$full_text <- gsub("[^[:alnum:]#\\.]+", " ", tibble_tweets$full_text) # remove punctuation
+tibble_tweets$full_text <- tolower(tibble_tweets$full_text) # convert to lowercase
+
+
+tibble_tweets$full_text %>% head()
+```
+```{r}
+# extracting 4000 tweets related to global warming topic
+tweets <- searchTwitter("#globalwarming", n=4000, lang="en")
+n.tweet <- length(tweets)
+
+# convert tweets to a data frame
+tweets.df <- twListToDF(tweets)
+
+tweets.txt <- sapply(tweets, function(t)t$getText())
+# Ignore graphical Parameters to avoid input errors
+tweets.txt <- str_replace_all(tweets.txt,"[^[:graph:]]", " ")
+
+## pre-processing text:
+clean.text = function(x)
+{
+  # convert to lower case
+  x = tolower(x)
+  # remove rt
+  x = gsub("rt", "", x)
+  # remove at
+  x = gsub("@\\w+", "", x)
+  # remove punctuation
+  x = gsub("[[:punct:]]", "", x)
+  
+  x = gsub("[^[:alnum:]#\\.]+", " ", x) 
+  
+  # remove numbers
+  x = gsub("[[:digit:]]", "", x)
+  # remove links http
+  x = gsub("http\\w+", "", x)
+  # remove tabs
+  x = gsub("[ |\t]{2,}", "", x)
+  # remove blank spaces at the beginning
+  x = gsub("^ ", "", x)
+  # remove blank spaces at the end
+  x = gsub(" $", "", x)
+  # some other cleaning text
+  x = gsub('https://','',x)
+  x = gsub('http://','',x)
+  x = gsub('[^[:graph:]]', ' ',x)
+  x = gsub('[[:punct:]]', '', x)
+  x = gsub('[[:cntrl:]]', '', x)
+  x = gsub('\\d+', '', x)
+  x = str_replace_all(x,"[^[:graph:]]", " ")
+  return(x)
+}
+
+cleanText <- clean.text(tibble_tweets$full_text)
+# remove empty results (if any)
+idx <- which(cleanText == " ")
+cleanText <- cleanText[cleanText != " "]
+```
+
+
+
+
+
+The first very obvipoous analysis that we can do is to make a words counting 
+
+
+```{r}
+install.packages('tm')
+
+
+
+
+library(tm)
+
+# Convert the text documents into a corpus
+corpus <- Corpus(VectorSource(tibble_tweets$full_text))
+# Remove stop words from the corpus
+corpus <- tm_map(corpus, removeWords, stopwords("english"))
+# Convert the resulting corpus back into a character vector
+text_docs_without_stop_words <- sapply(corpus, as.character)
+
+
+tibble_tweets_clean <- tibble_tweets
+
+tibble_tweets_clean$text <- text_docs_without_stop_words
+
+
+library(tidytext)
+tweets_words <- tibble_tweets_clean %>%
+  unnest_tokens(word, text) %>%
+  count(word, sort = TRUE) %>% 
+  dplyr::filter(str_length(word) >1)
+
+```
+
+
+
+
 
 ## Automated Classification with a Dictionary
 
