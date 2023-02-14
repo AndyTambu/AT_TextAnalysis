@@ -13,8 +13,13 @@ library(magrittr)
 library(plotly)
 library(rtweet)
 library(tidyverse)
-
-
+library(tm)
+library(tidytext)
+library(wordcloud)
+library(viridis)
+library('lexicon')
+library(MASS)
+library(topicmodels)
 
 ```
   
@@ -29,43 +34,40 @@ library(tidyverse)
   
   
   
-  # Automated Article Classification and Validation
+  # Twitter data analysis, topic modelling and sentiment analysis
   
   ### Data
   
-  For the project I consulted the PhD candidate Leonie Möck from the departement of Philosophy. She gave me some suggestions regardign some authors whose focus is mostly on philosophy of technology and who ofter engage with the problematic role that AI started having in our lifes.
+  For the project I consulted the PhD candidate Leonie Möck from the department of Philosophy. She gave me some suggestions regardign some authors whose focus is mostly on philosophy of  technology and who often engage with the problematic role that AI started having in our life.
 
   
-  
-For the "next" tasks, we will work with an example text data, headlines from German news articles about migration. The data set is a subset of the [REMINDER media corpus](https://doi.org/10.11587/IEGQ1B).
 
 Lets load the data first and take a look. Each row represents one news article.
 
 ```{r}
 ## load rtweet
 ## load the tidyverse
-## store api keys (these are fake example values; replace with your own keys)
-api_key <- "yBUKMtVObxyq0FgJQfKas0FlN"
-api_secret_key <- "f1KS00WgexCdlh8fYLIc1XJu4MXi6GLFgOdkekeQcJwUx7zMII"
-## authenticate via web browser
-token <- create_token(
-  app = "rstatsjournalismresearch",
-  consumer_key = api_key,
-  consumer_secret = api_secret_key)
-get_token()
-
-rt <- search_tweets("#DataScience", n = 1000, include_rts = FALSE)
-View(rt)
-
-auth_get()
-#here is where I authenticate into my twitter app. 
-my_app <-rtweet_app(
-  "AAAAAAAAAAAAAAAAAAAAAIu%2BKQEAAAAAeqDhfFHMTUIbxX%2FWejDsB80JF0s%3DcAxcbtzPMuHf3XxGsGQKxE66pgsGA7CJs8UK0GUkNvk7NTtgfE"
-)
-
-auth_as(my_app)
-
-
+# ## store api keys (these are fake example values; replace with your own keys)
+# api_key <- "yBUKMtVObxyq0FgJQfKas0FlN"
+# api_secret_key <- "f1KS00WgexCdlh8fYLIc1XJu4MXi6GLFgOdkekeQcJwUx7zMII"
+# ## authenticate via web browser
+# token <- create_token(
+#   app = "rstatsjournalismresearch",
+#   consumer_key = api_key,
+#   consumer_secret = api_secret_key)
+# get_token()
+# 
+# rt <- search_tweets("#DataScience", n = 1000, include_rts = FALSE)
+# View(rt)
+# 
+# auth_get()
+# #here is where I authenticate into my twitter app. 
+# my_app <-rtweet_app(
+#   "AAAAAAAAAAAAAAAAAAAAAIu%2BKQEAAAAAeqDhfFHMTUIbxX%2FWejDsB80JF0s%3DcAxcbtzPMuHf3XxGsGQKxE66pgsGA7CJs8UK0GUkNvk7NTtgfE"
+# )
+# 
+# auth_as(my_app)
+# 
 
 # here I select the authors whose content I want to analyse
 auths <- c('Floridi', 'katecrawford', 'spillteori', 'SSorgner', 'PaulNemitz', 'SvenNyholm', 'jud1ths1mon', 
@@ -79,11 +81,11 @@ auths <- c('Floridi', 'katecrawford', 'spillteori', 'SSorgner', 'PaulNemitz', 'S
 
 
 ```
-Thi schuck of code takes relatively long to download all the tweets, this is why you can directly source them from the data I provided with the project file. 
+This schuck of code takes relatively long to download all the tweets, this is why you can directly source them from the data I provided with the project file. 
 ```{r}
 
-load('all_the_tweets.rds')
-all_the_tweets[[1]] %>% colnames() 
+load('all_the_tweets_long.rds')
+
 # in this way we can see how the 
 
 
@@ -94,14 +96,11 @@ all_the_tweets[[1]] %>% colnames()
 
 These tweets come out of the function as a list. What I do in the following chuck on code is to transfrom them in a Tibble assigning also a new columsn so that they can be associated more easily with the author. 
 
-```{r}
-
-
-
-```
 
 
 ```{r}
+all_the_tweets = all_the_tweets_long
+
 
 selected_columns <- lapply(seq_along(all_the_tweets), function(i) {
   
@@ -122,14 +121,16 @@ tibble_tweets <- bind_rows(selected_columns)
 Ok the first basic analysis which we have to do is to analyse the kind of time-line we are dealing with.
 
 ```{r}
-tibble_tweets %<>%  
+tibble_tweets %<>%
   mutate(
-    created = created_at %>% 
+    created = created_at %>%
       # Remove zeros.
       str_remove_all(pattern = '\\+0000') %>%
       # Parse date.
       parse_date_time(orders = '%y-%m-%d %H%M%S')
   )
+
+
 
 tibble_tweets %<>% 
   mutate(Created_At_Round = created%>% round(units = 'hours') %>% as.POSIXct())
@@ -149,8 +150,23 @@ plt <- tibble_tweets %>%
 
 plt %>% ggplotly()
 ```
+Well it is quite onbvious that the accounts where active at very different times. We can see if actually makes sense to have the whole timeline or maybe reduce it.
 
+```{r}
 
+plt <- tibble_tweets %>% 
+  group_by(author) %>% 
+  dplyr::count(Created_At_Round) %>% 
+  ggplot(mapping = aes(x = Created_At_Round, y = n)) +
+  theme_light() +
+  geom_line() +
+  facet_wrap(~author)+
+  xlab(label = 'Date') +
+  ylab(label = NULL) +
+  ggtitle(label = 'Number of Tweets per Hour')
+
+plt %>% ggplotly()
+```
 
 Let us now inspect the column `text`, the column with our text to be analyzed. 
 
@@ -168,41 +184,19 @@ class(tibble_tweets$full_text) # check the class of the column.
 Ok now what we have to do is to clean a biut these data and see what comes out of them 
 
 ```{r}
-tibble_tweets$full_text <- gsub("RT", "", tibble_tweets$full_text) # remove RT
-tibble_tweets$full_text <- gsub("http\\S+", "", tibble_tweets$full_text) # remove URLs
-tibble_tweets$full_text <- gsub("@\\S+", "", tibble_tweets$full_text) # remove mentions
-tibble_tweets$full_text <- gsub("[^[:alnum:]#\\.]+", " ", tibble_tweets$full_text) # remove punctuation
-tibble_tweets$full_text <- tolower(tibble_tweets$full_text) # convert to lowercase
-
-
-tibble_tweets$full_text %>% head()
-```
-```{r}
-# extracting 4000 tweets related to global warming topic
-tweets <- searchTwitter("#globalwarming", n=4000, lang="en")
-n.tweet <- length(tweets)
-
-# convert tweets to a data frame
-tweets.df <- twListToDF(tweets)
-
-tweets.txt <- sapply(tweets, function(t)t$getText())
-# Ignore graphical Parameters to avoid input errors
-tweets.txt <- str_replace_all(tweets.txt,"[^[:graph:]]", " ")
-
 ## pre-processing text:
 clean.text = function(x)
 {
   # convert to lower case
   x = tolower(x)
   # remove rt
-  x = gsub("rt", "", x)
+  x = gsub("rt ", "", x)
   # remove at
   x = gsub("@\\w+", "", x)
   # remove punctuation
   x = gsub("[[:punct:]]", "", x)
   
   x = gsub("[^[:alnum:]#\\.]+", " ", x) 
-  
   # remove numbers
   x = gsub("[[:digit:]]", "", x)
   # remove links http
@@ -224,31 +218,35 @@ clean.text = function(x)
   return(x)
 }
 
+tibble_tweets$full_text
+
+
+
 cleanText <- clean.text(tibble_tweets$full_text)
 # remove empty results (if any)
 idx <- which(cleanText == " ")
 cleanText <- cleanText[cleanText != " "]
+
+
+# after checking for its quality we assign the new column usig the double pipe fro magrittr
+tibble_tweets %<>%
+  mutate(cleanText = clean.text(tibble_tweets$full_text))
+
+
+
 ```
 
-
-
-
-
-The first very obvipoous analysis that we can do is to make a words counting 
+The first analysis that we can do is to make a words counting 
 
 
 ```{r}
-install.packages('tm')
-
-
-
-
-library(tm)
-
 # Convert the text documents into a corpus
-corpus <- Corpus(VectorSource(tibble_tweets$full_text))
+corpus <- Corpus(VectorSource(tibble_tweets$cleanText))
 # Remove stop words from the corpus
-corpus <- tm_map(corpus, removeWords, stopwords("english"))
+corpus <- tm_map(corpus, removeWords,  c("ai","will", "well","like","new",'the','amp', 'thanks', 'thank', 'good','can','just','one','us',
+                                         'gtgt', 'use', 'join', 'make', 'really', 'im', 'way',
+                                         stopwords("english"), 
+                                         lexicon::function_words))
 # Convert the resulting corpus back into a character vector
 text_docs_without_stop_words <- sapply(corpus, as.character)
 
@@ -258,424 +256,274 @@ tibble_tweets_clean <- tibble_tweets
 tibble_tweets_clean$text <- text_docs_without_stop_words
 
 
-library(tidytext)
 tweets_words <- tibble_tweets_clean %>%
   unnest_tokens(word, text) %>%
-  count(word, sort = TRUE) %>% 
+  dplyr::count(word, sort = TRUE) %>% 
   dplyr::filter(str_length(word) >1)
-
 ```
-
-
-
-
-
-## Automated Classification with a Dictionary
-
-For this tutorial, we like to identify all articles that mention political actors in their headlines. The salience of 'Political actors' is the concept that we like to measure with an automated text analysis method, a dictionary. As a first step, we define the concept more closely.
-
-### Concept Definition
-
-**Political actors** are here defined as political parties represented in the German Bundestag between 2000 and 2017, which is the period in which the articles in our sample where published. Next to these parties, we define German politicians with a leading role as political actors. To keep the task manageable for this exercise, we focus only on actors highly relevant between 2000 and 2017. 
-
-We intend to measure the salience of political actors as simple binary variable:
-1 = At least one political actor is mentioned
-0 = No political actor is mentioned.
-
-### Dictionary creation
-
-A dictionary is a set of keywords or phrases that represent the concept of interest. 
-
-We now start to collect relevant keywords for the dictionary. We start with a list of keywords that we consider most relevant. An example for a relevant keyword is "angela merkel".
-For clarity, we here work with two keyword sets: we collect the keywords related to politicians in one vector (here named `politicians`), and keywords related to political parties in another vector (here named `parties`). 
-
-The keywords are written as regular expressions. A ‘regular expression’ is a pattern that describes a string. To learn more about regular expressions, we recommend this R tutorial [(Wickham & Grolemund, 2017)](https://r4ds.had.co.nz/strings.html). To test regular expressions quickly, visit https://spannbaueradam.shinyapps.io/r_regex_tester/
+from this first analysis we do not obtain particularly surprising results. The word counts are basically reflecting the specificity of the crown we selected. 
+What we can do to make it a bit more interesting is tu visualise it in a bit more attractive manner. For this I use the wordcloud package and its basic visualisation
 
 ```{r}
+tweets_words_best25 <-  tweets_words %>% 
+                        filter(n > 500 )
 
-politicians <- c("angela merkel", "gerhard schröder", "(?:^|\\W)kanzler")
-parties <- c("spd", "cdu", "grüne", "fdp", "linke", "afd")
+n_colors <- 8
+colors <- brewer.pal(n_colors, "Dark2")
 
+
+wordcloud(tweets_words_best25$word, tweets_words_best25$n, scale=c(5, 0.1), colors=colors, random.order = FALSE)
 ```
 
-Some questions:
+# Sentiment analysis
 
-Pros and cons of storing all keywords in one vector?
-Should we also add "kanzlerin"? No becasue we have the regex which is looking for 'kanzler'
-What other keywords are relevant to measure the concept?
+In the next chuncks I work on some sentiment analysis regardign the tweets we downloaded. I am using the structure and the structure which I found online at [djdjdjf]
 
-
-All vector names (e.g.,"politicians") are then saved in another vector.
 
 ```{r}
-
-dict_name <- c("politicians", "parties") 
-
+positive = scan('./words/positive-words.txt', what = 'character', comment.char = ';')
+negative = scan('./words/negative-words.txt', what = 'character', comment.char = ';')
+# add your list of words below as you wish if missing in above read lists
+pos.words = c(positive,'ethical','aware','regulated')
+neg.words = c(negative,'unregulated','invasive','uncontrolled')
 ```
 
-Before we search the keyword in the headlines, we  apply some pre-processing steps to the headlines. For this exercise, we designed the keywords all in lower case, so the headlines have to be lower case too.
+The next function is also taken fromt he same link. Anyway, I added some commenting. 
 
 ```{r}
-
-articles_de$headline <- tolower(articles_de$headline) # convert text to lower case
-head(articles_de$headline)
-```
-
-We now search the keywords in the article headlines. The function `stri_count_regex` from the R package **stringr** can count how often a pattern appears in a text. We call this here the number of hits. The function can search for regular expression. We here ask to count a pattern in the column `headline` of the dataframe `articles_de`. 
-
-The patterns to count are the politician keywords and the party keywords. 
-
-```{r}
-#install.packages("stringi")
-library(stringi)
-
-n <- length(dict_name)# number of keyword sets (each is counted separately)
-codings <- vector("list", n)# create an empty list, to be filled in the loop
-
-for (i in dict_name) {# each keyword set stored in vector 'dict name' is looked at separately
-  print(i)
-  match <- stri_count_regex(articles_de$headline, paste(get(i), collapse='|'))
-  codings[[i]] <- data.frame(name=match)
+score.sentiment = function(sentences, pos.words, neg.words, .progress='none')
+{
+  require(plyr)
+  require(stringr)
+  
+  # we are giving vector of sentences as input. 
+  # plyr will handle a list or a vector as an "l" for us
+  # we want a simple array of scores back, so we use "l" + "a" + "ply" = laply:
+  scores = laply(sentences, function(sentence, pos.words, neg.words) {
+    
+    # clean up sentences with R's regex-driven global substitute, gsub() function:
+    sentence = gsub('https://','',sentence)
+    sentence = gsub('http://','',sentence)
+    sentence = gsub('[^[:graph:]]', ' ',sentence)
+    sentence = gsub('[[:punct:]]', '', sentence)
+    sentence = gsub('[[:cntrl:]]', '', sentence)
+    sentence = gsub('\\d+', '', sentence)
+    sentence = str_replace_all(sentence,"[^[:graph:]]", " ")
+    # and convert to lower case:
+    sentence = tolower(sentence)
+    
+    # split into words. str_split is in the stringr package
+    word.list = str_split(sentence, '\\s+')
+    # sometimes a list() is one level of hierarchy too much
+    words = unlist(word.list)
+    
+    # compare our words to the dictionaries of positive & negative terms
+    pos.matches = match(words, pos.words)
+    neg.matches = match(words, neg.words)
+    
+    # match() returns the position of the matched term or NA
+    # we just want a TRUE/FALSE:
+    pos.matches = !is.na(pos.matches)
+    neg.matches = !is.na(neg.matches)
+    
+    # TRUE/FALSE will be treated as 1/0 by sum():
+    score = sum(pos.matches) - sum(neg.matches)
+    
+    return(score)
+  }, pos.words, neg.words, .progress=.progress )
+  
+  scores.df = data.frame(score=scores, text=sentences)
+  return(scores.df)
 }
 
-codings <- codings[-c(1:n)] # save the relevant part of the list 
-codings_df <- do.call("cbind", codings) # unlist
-codings_df
-
+score_tbl <- score.sentiment(tibble_tweets$cleanText, pos.words, neg.words)
+# sentiment score frequency table
+table(score_tbl$score)
 ```
 
-Some recoding to get the column names correct.
+
+
 
 ```{r}
-
-# replace names in resulting df with names from dict_name 
-cols <- names(codings_df) == "name"# vector with all names in resulting dataframe
-names(codings_df)[cols] <- paste0("name", seq.int(sum(cols))) # add a number behing each colname (to make them differ, necessary for next step)
-oldnames <- colnames(codings_df)# a vector with the names of dict
-newnames <- names(codings)# a vector with names stored in list
-
-#install.packages("data.table")
-library(data.table)
-setnames(codings_df, old = oldnames, new = newnames)# finally replace the current names with the correct ones
-codings_df
-
-```
-
-We now add the number of hits counted by the dictionary (saved in the dataframe `codings_df`) to the articles (the object `articles_de`). Since we did not shuffle the order of rows, we can bind both data frames together with the function `bind_cols`. We create a new dataframe with headlines, article meta-data and codings.
-
-```{r}
-
-#install.packages("dplyr")
-library(dplyr)
-articles_de_hits <- bind_cols(articles_de, codings_df)
-
-```
-
-One way to see the headlines for which the dictionary counted a hit?  
-
-```{r}
-
-testa <- subset(articles_de_hits, parties >=1)
-head(testa$headline) 
-
-testb <- subset(articles_de_hits, politicians >=1)
-head(testb$headline) 
-
-```
-
-So far, we obtained a count, that represents how often the keywords were detected per text. Since weinitially proposed a simple binary measurement, we now do some recoding. 
-
-We add a new column to the dataframe called `actors_d`. This column includes a 1 if at least one of all defined keywords creates a hit, and a 0 if no keyword was found. 
-
-```{r}
-
-articles_de_hits$actors_d <- case_when(articles_de_hits$parties >= 1 |articles_de_hits$politicians >= 1 ~ 1)# | means or. 
-articles_de_hits <- articles_de_hits %>% mutate(actors_d = if_else(is.na(actors_d), 0, actors_d)) # set NA to 0 
-
-```
-
-According to our automated measurement, how many articles mention political actors in their headlines?
-
-```{r}
-
-table(articles_de_hits$actors_d) # descriptive overview
-
-```
-
-We have now managed to get an automated measurement for the variable. **But how valid is this measurement?** Does our small set of keywords represent the concept adequately?
-
-A common procedure in automated content analysis is to test construct validity. We ask:
-How close is this automated measurement to a more trusted measurement: Human understanding of text.
-Let's put this to practice. 
-
-## Dictionary validation with a human coded baseline
-
-To validate the dictionary, we compare the classifications of the dictionary with the classifications of human coders. 
-
-We create the human coded baseline together. 
-
-### Intercoder reliability test
-
-To ensure the quality of our manual coding, we first perform an intercoder reliability test. For this tutorial, we select a random set of 10 articles. In a real study the number of observations coded by several coders should be higher.  
-
-```{r}
-
-set.seed(57)# setting a seed ensures that the random selection can be repeated in the same way
-library(dplyr)
-intercoder_set <- sample_n(articles_de, 10) #select 10 random rows
-
-```
-
-We now add an empty column called `actors_m`, so that coders can enter the manual codes.
-
-```{r}
-
-intercoder_set$actors_m <- "" 
-
-```
-
-We then create several duplicates of the intercoder reliability set, one for each coder. We create separate files so that coders can so that everyone codes individually and does not peek by mistake.
-To each of these sets we add the coder name in a new column called `coder_name`.
-For this example, we now need 2 volunteers. Who would like to code?
+score_tbl %>%
+  ggplot(aes(x=score, fill= ..count..)) + 
+  geom_histogram(binwidth = 0.5)+ 
+  ylab("Frequency") + 
+  xlab("sentiment score") +
+  ggtitle("Distribution of Sentiment scores of the tweets") +
+  theme_minimal()
   
-  ```{r}
-
-intercoder_set_coder1 <- intercoder_set
-intercoder_set_coder1$coder_name <- "Coder1"
-
-intercoder_set_coder2 <- intercoder_set
-intercoder_set_coder2$coder_name <- "Coder2"
-
-#...
-
+  
 ```
+The majority of the tweets are not directly categorised into positive or negative content. This might be due to how we select the words (we might be missing something) or to the relative careful tone which the selected authors have in expressing their opinions.
 
-We then want to save the data sets in google sheets. Detailed instructions about the conncection of **R** and **Google Sheets** can be found in  [this](https://googlesheets4.tidyverse.org/articles/drive-and-sheets.html) and [this ](https://googlesheets4.tidyverse.org/articles/drive-and-sheets.html) tutorial.
 
-The two packages needed here are **googledrive** and **googlesheets4**.
+What we can do now, is again a Wordclouds visualisation but enriched with the levelling of the positive-negative categorisation. 
+
+
 
 ```{r}
+# Convert the text documents into a corpus
+corpus <- Corpus(VectorSource(tibble_tweets$cleanText))
+# Remove stop words from the corpus
+corpus <- tm_map(corpus, removeWords,   c("ai","will", "well","like","new",'the','amp', 'thanks', 'thank', 'good','can','just','one','us',
+                                         'gtgt', 'use', 'join', 'make', 'really', 'im', 'way',
+                                         stopwords("english"), 
+                                         lexicon::function_words))
+# Convert the resulting corpus back into a character vector
+text_docs_without_stop_words <- sapply(corpus, as.character)
 
-#install.packages("googledrive")
-#install.packages("googlesheets4")
-library(googledrive)
-library(googlesheets4)
 
+tibble_tweets_clean <- tibble_tweets
+
+tibble_tweets_clean$text <- text_docs_without_stop_words
+
+
+tweets_words <- tibble_tweets_clean %>%
+  unnest_tokens(word, text) %>%
+  dplyr::count(word, sort = TRUE) %>% 
+  dplyr::filter(str_length(word) >1)
 ```
+
 
 ```{r}
+tibble_tweets_pos <- 
+  tibble_tweets %>% 
+  distinct(cleanText) %>% 
+  right_join(score_tbl %>% ungroup() %>%   filter(score > 0), by = c('cleanText' = 'text'))
+  
 
-# Authentication
-drive_auth(email ="fabienne.lind@gmail.com")
-gs4_auth(token = drive_token())
-drive_user()
+corpus_pos <- Corpus(VectorSource(tibble_tweets_pos$cleanText))
+# Remove stop words from the corpus
+corpus_pos <- tm_map(corpus_pos, removeWords,  c("ai","will", "well","like","new",'the','amp', 'thanks', 'thank', 'good','can','just','one','us',
+                                         'gtgt', 'use', 'join', 'make', 'really', 'im', 'way','great',
+                                         stopwords("english"), 
+                                         lexicon::function_words))
+# Convert the resulting corpus back into a character vector
+text_docs_without_stop_words_pos <- sapply(corpus_pos, as.character)
+
+
+tibble_tweets_clean_pos <- tibble_tweets_pos
+
+tibble_tweets_clean_pos$text <- text_docs_without_stop_words_pos
+
+
+tweets_words_pos <- tibble_tweets_clean_pos %>%
+  unnest_tokens(word, text) %>%
+  dplyr::count(word, sort = TRUE) %>% 
+  dplyr::filter(str_length(word) >1)
+
+
+
+tweets_words_best15_pos <-  tweets_words_pos %>% 
+                        filter(n > 300 )
+
+n_colors <- 8
+colors <- brewer.pal(n_colors, "Dark2")
+
+
+wordcloud(tweets_words_best15_pos$word, tweets_words_best15_pos$n, scale=c(4, 0.1), colors=colors, random.order = FALSE)
+
 ```
 
-We now save the datasets for the intercoder reliability test as Google Sheets with the function `gs4_create`. 
 
 ```{r}
+tibble_tweets_neg <- 
+  tibble_tweets %>% 
+  distinct(cleanText) %>% 
+  right_join(score_tbl %>% ungroup() %>%   filter(score < 0), by = c('cleanText' = 'text'))
+  
 
-sheet_id1<- gs4_create("intercoder_set_coder1",sheets = intercoder_set_coder1)
-sheet_id2<- gs4_create("intercoder_set_coder2",sheets = intercoder_set_coder2)
-
-```
-
-Ready to code? We will post links for the different files. Read the column `headline`. If the headline mentions a political actor insert `1` in the column `actors_m`. Enter a `0` in `actors_m` if the headline does not mention a political actor.
-
-After you finished coding, we read all sheets back into Rstudio (now with manual classifications for `actors_m`).
-
-```{r}
-
-intercoder_set_coder1c <- read_sheet(sheet_id1)
-intercoder_set_coder2c <- read_sheet(sheet_id2)
-
-
-```
-
-All dataframes are combined into one dataframe with the function `rbind`.
-
-```{r}
-
-reliability_set <- rbind(intercoder_set_coder1c, intercoder_set_coder2c) 
-
-```
-
-Too calculate the agreement between coders, we first restructure the `reliability_set` a bit (the different coders become variables). 'id' is the name of our id variable. 'coder_name' is the column with the different coder ids. And 'actors_m' is the variable for which we seek to test intercoder reliability.
-
-```{r}
-
-#install.packages("reshape2")
-library(reshape2) 
-
-reliability_restructured <- dcast(reliability_set, id ~ coder_name, value.var="actors_m")
-
-reliability_transp <- t(reliability_restructured) # transpose data frames (rows to columns, columns to rows)
-reliability_matrix <- data.matrix(reliability_transp) # convert df.t to matrix 
-reliability_matrix_final <- reliability_matrix[-1,] # delete first row of matrix
-
-```
-
-The package **irr** allows to calculate various coefficients of intercoder reliability. 
-We calculate Krippendorff's alpha for this example.
-
-```{r}
-
-#install.packages("irr")
-library(irr)  
-
-alpha_de <- kripp.alpha(reliability_matrix_final, method ="nominal") # select the appropriate method, nominal is default,
-alpha_de
-
-```
-
-If alpha is large enough, we consider the quality of our manual coding as sufficient. We can then start with the creation of a larger manual baseline to be compared with the dictionary classifications.
-
-## Creating a manually coded baseline
-
-We pick 100 headlines randomly. 
-
-```{r}
-
-#install.packages("dplyr")
-library(dplyr)
-
-set.seed(789)# setting a seed ensures that the random selection can be repeated in the same way
-manual_set <- sample_n(articles_de, 100)# select 100 random rows
-
-```
-
-We add again an empty column called `actors_m`, for coders to enter the manual codes. This time, we also add an empty column for the coder names.
-
-```{r}
-
-manual_set$actors_m <- "" 
-manual_set$coder_name <- ""
-
-```
-
-We create a google sheet for the task with `gs4_create`. 
-
-```{r}
-
-sheet_id_manual<- gs4_create("manual_set", sheets = manual_set)
-
-```
-
-Please open the sheet in your browser. Enter a coding name (free to pick) in the column `coder_name` for a couple of rows first. Then start to enter 1 (political actor in headline mentioned) or 0 (not mentioned) in the column `actors_m` for the rows with your coding name. Our goal is to finish coding of all headlines.
+corpus_neg <- Corpus(VectorSource(tibble_tweets_neg$cleanText))
+# Remove stop words from the corpus
+corpus_neg <- tm_map(corpus_neg, removeWords,  c("ai","will", "well","like","new",'the','amp', 'thanks', 'thank', 'good',
+                                                 'can','just','one','us', 'gtgt', 'use', 'join', 'make', 'really', 'im', 
+                                                 'way','great', 'issue', 'issues', 'time', 'problem','dont', 'find', 'bad',
+                                                 'isnt','see','seems','hard', 'said', 'eu', 'uk', 'don', 'lot', 'etc', 'theres', 'thats', 'news',
+                                         'year', 'least',
+                                         stopwords("english"), 
+                                         lexicon::function_words)) 
+# Convert the resulting corpus back into a character vector
+text_docs_without_stop_words_neg <- sapply(corpus_neg, as.character)
 
 
-After you finish coding, we read all sheets back into Rstudio (now with manual classifications for `actors_m`).
+tibble_tweets_clean_neg <- tibble_tweets_neg
 
-```{r}
-
-manual_set_coded <- read_sheet(sheet_id_manual)
-
-```
-
-We need to create a data set, where the manual and automated classifications are included.
-
-```{r}
-
-manual_set_coded <- subset(manual_set_coded, select = c("id", "actors_m"))# we need only 2 columns from the manual set
-articles_coded_d_m <- merge(manual_set_coded, articles_de_hits, by ="id")
-                           
-```
-
-## Compare automated with manual classifications 
-
-We compare the automated classification (in column `actors_d`) with the manual classifications (in column `actors_m`) we use three metrics: Recall, Precision, and F1.
-The metrics inform us about the quality of the dictionary. All three metrics range from 0 to 1. 
-We assume that our manual classification identified all relevant articles (here: headlines that mention a political actor).
+tibble_tweets_clean_neg$text <- text_docs_without_stop_words_neg
 
 
-To calculate the three metrics, we need first to create three new columns via some recoding. 
+tweets_words_neg <- tibble_tweets_clean_neg %>%
+  unnest_tokens(word, text) %>%
+  dplyr::count(word, sort = TRUE) %>% 
+  dplyr::filter(str_length(word) >1)
 
-The column `Relevant_andRetrieved` includes a 1 if the manual coder and the dictionary coded 1. = True positive
-The column `Relevant_notRetrieved` includes a 1 if the manual coder coded 1 but the dictionary coded 0. = False negative
-The column `notRelevant_butRetrieved` includes a 1 if the manual coder coded 0 but the dictionary coded 1. = False positive
 
-```{r}
 
-articles_coded_d_m$Relevant_andRetrieved[articles_coded_d_m$actors_m == 1 & articles_coded_d_m$actors_d== 1 ] <- 1
-articles_coded_d_m$Relevant_notRetrieved[articles_coded_d_m$actors_m == 1 & articles_coded_d_m$actors_d == 0 ] <- 1
-articles_coded_d_m$notRelevant_butRetrieved[articles_coded_d_m$actors_m == 0 & articles_coded_d_m$actors_d == 1 ] <- 1
+tweets_words_best25_neg <-  tweets_words_neg %>% 
+                        filter(n > 100 )
 
-```
+# tibble_tweets_clean$cleanText[grepl("chatgpt",tibble_tweets_clean$cleanText)]
 
-### Recall 
+n_colors <- 8
+colors <- brewer.pal(n_colors, "Dark2")
 
-By inspecting recall we can say how many relevant articles are retrieved by the dictionary.
-A recall of 1.0 means that our dictionary retrieved all relevant articles. 
-A recall of 0.8 means that our dictionary retrieved 80% of all relevant articles. 
 
-To obtain recall, we calculate:
-
-```{r}
-
-recall <- (sum(articles_coded_d_m$Relevant_andRetrieved, na.rm=TRUE))/(sum(articles_coded_d_m$Relevant_notRetrieved, na.rm=TRUE) + (sum(articles_coded_d_m$Relevant_andRetrieved, na.rm=TRUE)))
-recall
-
+wordcloud(tweets_words_best25_neg$word, tweets_words_best25_neg$n, scale=c(4, 0.1), colors=colors, random.order = FALSE)
 
 ```
 
 
-### Precision 
-
-By inspecting precision we can say how many retrieved articles are relevant.
-A precision of 1,0 means that all articles retrieved by the dictionary are relevant. 
-A precision of 0.8 means that 80% of the articles that our dictionary retrieved are relevant articles. 
-
-To obtain precision, we calculate:
-
-```{r}
-
-precision <- (sum(articles_coded_d_m$Relevant_andRetrieved, na.rm=TRUE))/(sum(articles_coded_d_m$notRelevant_butRetrieved, na.rm=TRUE) + (sum(articles_coded_d_m$Relevant_andRetrieved, na.rm=TRUE)))
-precision # 
-
-```
+Ok at this point is we can have a look at some topic modelling 
 
 
-### F1
+# topic modelling 
 
-F1 is the harmonic mean between recall and precision. 
-
-To obtain F1, we calculate:
-
-```{r}
-
-F1 <- (2 * precision * recall)/(precision + recall)
-F1
-
-```
-
-Questions: 
-
-- Say we have a precision of .9 but a recall of .1, what does this mean for the quality of our dictionary?
-
-- What can we do to improve recall?
-
-- What can we do to improve precision?
-
-
-
-### Improving precision: Fine-tuning of the keywords.
-
-```{r}
-
-politicians <- c()
-parties <- c()
-
-```
-
-### Improving recall: Extending the keywords
 
 ```{r}
 
 
+
+tweets_words <- tibble_tweets_clean %>%
+  unnest_tokens(word, text) %>%
+  dplyr::count(word, sort = TRUE) %>% 
+  dplyr::filter(str_length(word) >1)
+
+
+
+
+
+doc.lengths <- rowSums(as.matrix(DocumentTermMatrix(corpus)))
+dtm <- DocumentTermMatrix(corpus[doc.lengths > 0])
+# model <- LDA(dtm, 10)  # Go ahead and test a simple model if you want
+# Run LDA with different number of topics
+#LDA model with 5 topics selected
+lda_5 = LDA(dtm, k = 5, method = 'Gibbs', 
+          control = list(nstart = 5, seed = list(1505,99,36,56,88), best = TRUE, 
+                         thin = 500, burnin = 4000, iter = 2000))
+
+#LDA model with 2 topics selected
+lda_2 = LDA(dtm, k = 2, method = 'Gibbs', 
+          control = list(nstart = 5, seed = list(1505,99,36,56,88), best = TRUE, 
+                         thin = 500, burnin = 4000, iter = 2000))
+
+#LDA model with 10 topics selected
+lda_10 = LDA(dtm, k = 10, method = 'Gibbs', 
+          control = list(nstart = 5, seed = list(1505,99,36,56,88), best = TRUE, 
+                         thin = 500, burnin = 4000, iter = 2000))
 ```
 
 
-#Further readings
 
-[Song et al. (2020)](https://doi.org/10.1080/10584609.2020.1723752)
+
+
+
+
+
+
+
+
+
+
+
+
 
